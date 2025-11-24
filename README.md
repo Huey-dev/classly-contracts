@@ -301,4 +301,4 @@ MIT License - see LICENSE file
 
 ---
 
-**Built with ❤️ using Aiken and Cardano**
+**Built with ❤️ by classly team using Aiken and Cardano**
