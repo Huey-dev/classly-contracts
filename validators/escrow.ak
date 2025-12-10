@@ -1,34 +1,37 @@
-use aiken/list
-use aiken/time
-use aiken/transaction
-use aiken/transaction.{ScriptContext, Tx, Output, Credential}
+use aiken/collection/list
+use aiken/interval.{Finite}
+use cardano/transaction.{Input, Output, OutputReference, Transaction, InlineDatum}
+use cardano/address.{Address, Credential, VerificationKey}
+use cardano/assets.{Value, ada_policy_id, ada_asset_name, quantity_of}
 
 // Simplified, user-centric escrow with platform fee removal off-chain.
 // Net amounts (after 25% platform fee) are recorded and split 30/40/30 with gates.
 
-// Datum represents the aggregated course escrow state.
-type EscrowDatum {
-  Escrow {
-    receiver    : Credential,   // course owner / seller
-    oracle      : Credential,   // off-chain authority to attest metrics/disputes
-    net_total   : Int,          // cumulative net funds (post-fee) locked
-    paid_count  : Int,          // number of payers who funded
-    paid_out    : Int,          // total already paid to receiver
-    released30  : Bool,         // initial 30% batch paid (first 5 students)
-    released40  : Bool,         // metrics batch paid
-    releasedFinal : Bool,       // final 30% paid
-    comments    : Int,          // aggregated comments count
-    rating_sum  : Int,          // sum of ratings *10 (to avoid floats)
-    rating_count: Int,          // number of ratings
-    all_watch_met : Bool,       // true when all students have >=60% watch
-    first_watch  : time.Time,   // timestamp of first watch event
-    dispute_by   : time.Time    // deadline for dispute / final release
-  }
+pub type EscrowDatum {
+  receiver: ByteArray,      // course owner / seller pkh
+  oracle: ByteArray,        // off-chain authority pkh
+  net_total: Int,           // cumulative net funds (post-fee) locked
+  paid_count: Int,          // number of payers who funded
+  paid_out: Int,            // total already paid to receiver
+  released30: Bool,         // initial 30% batch paid (first 5 students)
+  released40: Bool,         // metrics batch paid
+  releasedFinal: Bool,      // final 30% paid
+  comments: Int,            // aggregated comments count
+  rating_sum: Int,          // sum of ratings *10 (to avoid floats)
+  rating_count: Int,        // number of ratings
+  all_watch_met: Bool,      // true when all students have >=60% watch
+  first_watch: Int,         // timestamp of first watch event (posix milliseconds)
+  dispute_by: Int,          // deadline for dispute / final release (posix milliseconds)
 }
 
-// Redeemer captures intent and optional payload for payments/metrics.
-type Redeemer {
-  AddPayment { net_amount: Int, watch_met: Bool, rating_x10: Int, commented: Bool, first_watch_at: time.Time }
+pub type Redeemer {
+  AddPayment { 
+    net_amount: Int, 
+    watch_met: Bool, 
+    rating_x10: Int, 
+    commented: Bool, 
+    first_watch_at: Int 
+  }
   ReleaseInitial
   ReleaseMetrics40
   ReleaseFinal
@@ -36,159 +39,186 @@ type Redeemer {
   DisputeHold
 }
 
-fn expect_signature(cred: Credential, ctx: ScriptContext) -> Bool {
-  when cred is {
-    Credential::PubKey(pkh) -> transaction.tx_signed_by(ctx.transaction, pkh)
-    Credential::Script(_) -> False
-  }
+fn expect_signature(pkh: ByteArray, extra_sigs: List<ByteArray>) -> Bool {
+  list.has(extra_sigs, pkh)
 }
 
-fn lovelace_of(out: Output) -> Int {
-  transaction.value_get_amount(out.value, "lovelace")
+fn lovelace_of(val: Value) -> Int {
+  quantity_of(val, ada_policy_id, ada_asset_name)
 }
 
-fn find_continuing(ctx: ScriptContext) -> Option<Output> {
-  list.find(ctx.outputs, fn(o: Output) { o.address == ctx.script_address })
-}
-
-fn continuing_matches(ctx: ScriptContext, predicate: fn(EscrowDatum) -> Bool) -> Bool {
-  find_continuing(ctx)
-    |> Option.map(fn(o: Output) {
-         when o.datum is {
-           datum::inline(next: EscrowDatum) -> predicate(next)
-           _ -> False
-         }
-       })
-    |> Option.unwrap_or(False)
+fn find_continuing(outputs: List<Output>, script_addr: Address) -> Option<Output> {
+  list.find(outputs, fn(o) { o.address == script_addr })
 }
 
 fn avg_rating_ok(sum: Int, count: Int, threshold_x10: Int) -> Bool {
   if count == 0 {
     False
   } else {
-    sum * 1_000 >= threshold_x10 * count * 100  // compare with scale to avoid floats
+    sum * 1_000 >= threshold_x10 * count * 100
   }
 }
 
-validator escrow(datum: EscrowDatum, redeemer: Redeemer, ctx: ScriptContext) -> Bool {
-  let tx = ctx.transaction
+fn has_output_to_pkh(outputs: List<Output>, pkh: ByteArray, min_amount: Int) -> Bool {
+  list.any(
+    outputs,
+    fn(o) {
+      when o.address.payment_credential is {
+        VerificationKey(pk) -> pk == pkh && lovelace_of(o.value) >= min_amount
+        _ -> False
+      }
+    },
+  )
+}
 
-  when datum is {
-    Escrow{
-      receiver, oracle, net_total, paid_count, paid_out,
-      released30, released40, releasedFinal,
-      comments, rating_sum, rating_count, all_watch_met,
-      first_watch, dispute_by
-    } -> {
-      when redeemer is {
-        Redeemer::AddPayment{ net_amount, watch_met, rating_x10, commented, first_watch_at } -> {
-          // Off-chain already removed 25% platform fee; net_amount is what enters script.
-          // If payer index >5, allow immediate 30% payout from this net_amount.
-          let new_count = paid_count + 1
-          let immediate_payout = if new_count > 5 { (net_amount * 30) / 100 } else { 0 }
-          // Check receiver gets immediate payout if applicable
-          let ok_payout =
-            if immediate_payout > 0 {
-              list.any(ctx.outputs, fn(o: Output) {
-                o.address.credential == receiver && lovelace_of(o) >= immediate_payout
-              })
-            } else { True }
+fn parse_output_datum(out: Output) -> Option<EscrowDatum> {
+  when out.datum is {
+    InlineDatum(data) -> {
+      expect datum: EscrowDatum = data
+      Some(datum)
+    }
+    _ -> None
+  }
+}
 
-          ok_payout &&
-          continuing_matches(ctx, fn(next: EscrowDatum) {
-            when next is {
-              Escrow{
-                receiver: r2, oracle: o2, net_total: nt2, paid_count: pc2, paid_out: po2,
-                released30: rel30, released40: rel40, releasedFinal: relF,
-                comments: c2, rating_sum: rs2, rating_count: rc2, all_watch_met: aw2,
-                first_watch: fw2, dispute_by: db2
-              } ->
-                r2 == receiver &&
-                o2 == oracle &&
-                nt2 == net_total + net_amount - immediate_payout &&
-                pc2 == new_count &&
-                po2 == paid_out + immediate_payout &&
-                rel30 == released30 &&
-                rel40 == released40 &&
-                relF == releasedFinal &&
-                c2 == comments + (if commented { 1 } else { 0 }) &&
-                rs2 == rating_sum + rating_x10 &&
-                rc2 == rating_count + (if rating_x10 > 0 { 1 } else { 0 }) &&
-                aw2 == (all_watch_met && watch_met) ||
-                       (paid_count == 0 && watch_met) ||
-                       (all_watch_met && !watch_met == False) ||
-                       (watch_met && paid_count == pc2 - 1) ||
-                       (all_watch_met) || False &&
-                // first_watch set to earliest observed
-                fw2 == (if first_watch == time.from_posix(0) { first_watch_at } else { first_watch }) &&
-                db2 == dispute_by
-            }
-          })
-        }
+validator escrow {
+  spend(
+    datum_opt: Option<EscrowDatum>,
+    redeemer: Redeemer,
+    own_ref: OutputReference,
+    tx: Transaction,
+  ) -> Bool {
+    expect Some(datum) = datum_opt
+    
+    // Get script address from input being spent
+    expect Some(own_input) = 
+      list.find(tx.inputs, fn(i) { i.output_reference == own_ref })
+    let script_addr = own_input.output.address
+    
+    when redeemer is {
+      AddPayment { net_amount, watch_met, rating_x10, commented, first_watch_at } -> {
+        let new_count = datum.paid_count + 1
+        let immediate_payout =
+          if new_count > 5 {
+            net_amount * 30 / 100
+          } else {
+            0
+          }
 
-        Redeemer::ReleaseInitial ->
-          expect_signature(receiver, ctx)
-            && paid_count >= 5
-            && !released30
-            && list.any(ctx.outputs, fn(o: Output) {
-                 o.address.credential == receiver &&
-                 lovelace_of(o) >= (net_total * 30) / 100
-               })
-            && continuing_matches(ctx, fn(next: EscrowDatum) {
-                 when next is {
-                   Escrow{ released30: True, paid_out: po2, net_total: nt2, ..old } ->
-                     po2 == paid_out + (net_total * 30) / 100 &&
-                     nt2 == net_total - (net_total * 30) / 100 &&
-                     old.receiver == receiver && old.oracle == oracle
-                 }
-               })
+        let ok_payout =
+          if immediate_payout > 0 {
+            has_output_to_pkh(tx.outputs, datum.receiver, immediate_payout)
+          } else {
+            True
+          }
 
-        Redeemer::ReleaseMetrics40 ->
-          expect_signature(receiver, ctx)
-            && released30
-            && !released40
-            && all_watch_met
-            && comments >= 3
-            && avg_rating_ok(rating_sum, rating_count, 35) // >=3.5
-            && list.any(ctx.outputs, fn(o: Output) {
-                 o.address.credential == receiver &&
-                 lovelace_of(o) >= (net_total * 40) / 100
-               })
-            && continuing_matches(ctx, fn(next: EscrowDatum) {
-                 when next is {
-                   Escrow{ released40: True, paid_out: po2, net_total: nt2, ..old } ->
-                     po2 == paid_out + (net_total * 40) / 100 &&
-                     nt2 == net_total - (net_total * 40) / 100 &&
-                     old.receiver == receiver && old.oracle == oracle
-                 }
-               })
+        expect Some(continuing_out) = find_continuing(tx.outputs, script_addr)
+        expect Some(next) = parse_output_datum(continuing_out)
 
-        Redeemer::ReleaseFinal ->
-          expect_signature(receiver, ctx)
-            && released40
-            && !releasedFinal
-            && (time.after(dispute_by, tx.valid_range) || time.before(first_watch + time.from_seconds(10 * 24 * 3600), tx.valid_range))
-            && list.any(ctx.outputs, fn(o: Output) {
-                 o.address.credential == receiver &&
-                 lovelace_of(o) >= (net_total * 30) / 100
-               })
-            // final consumption; state can be burned
+        ok_payout && (
+          next.receiver == datum.receiver &&
+          next.oracle == datum.oracle &&
+          next.net_total == datum.net_total + net_amount - immediate_payout &&
+          next.paid_count == new_count &&
+          next.paid_out == datum.paid_out + immediate_payout &&
+          next.released30 == datum.released30 &&
+          next.released40 == datum.released40 &&
+          next.releasedFinal == datum.releasedFinal &&
+          next.comments == datum.comments + if commented { 1 } else { 0 } &&
+          next.rating_sum == datum.rating_sum + rating_x10 &&
+          next.rating_count == datum.rating_count + if rating_x10 > 0 { 1 } else { 0 } &&
+          next.all_watch_met == if datum.paid_count == 0 {
+            watch_met
+          } else {
+            datum.all_watch_met && watch_met
+          } &&
+          next.first_watch == if datum.first_watch == 0 {
+            first_watch_at
+          } else {
+            datum.first_watch
+          } &&
+          next.dispute_by == datum.dispute_by
+        )
+      }
 
-        Redeemer::Refund ->
-          // Refund allowed if metrics unmet or within dispute window with oracle signature
-          (time.before(dispute_by, tx.valid_range) || !all_watch_met || comments < 3 || !avg_rating_ok(rating_sum, rating_count, 35))
-            && (expect_signature(oracle, ctx))
+      ReleaseInitial -> {
+        let payout_amount = datum.net_total * 30 / 100
 
-        Redeemer::DisputeHold ->
-          expect_signature(oracle, ctx)
-            && continuing_matches(ctx, fn(next: EscrowDatum) {
-                 when next is {
-                   Escrow{ receiver: r2, oracle: o2, ..old } ->
-                     r2 == receiver && o2 == oracle && old.releasedFinal == False
-                 }
-               })
+        expect Some(continuing_out) = find_continuing(tx.outputs, script_addr)
+        expect Some(next) = parse_output_datum(continuing_out)
+
+        expect_signature(datum.receiver, tx.extra_signatories) &&
+        datum.paid_count >= 5 &&
+        !datum.released30 &&
+        has_output_to_pkh(tx.outputs, datum.receiver, payout_amount) &&
+        next.released30 == True &&
+        next.paid_out == datum.paid_out + payout_amount &&
+        next.net_total == datum.net_total - payout_amount &&
+        next.receiver == datum.receiver &&
+        next.oracle == datum.oracle
+      }
+
+      ReleaseMetrics40 -> {
+        let payout_amount = datum.net_total * 40 / 100
+
+        expect Some(continuing_out) = find_continuing(tx.outputs, script_addr)
+        expect Some(next) = parse_output_datum(continuing_out)
+
+        expect_signature(datum.receiver, tx.extra_signatories) &&
+        datum.released30 &&
+        !datum.released40 &&
+        datum.all_watch_met &&
+        datum.comments >= 3 &&
+        avg_rating_ok(datum.rating_sum, datum.rating_count, 35) &&
+        has_output_to_pkh(tx.outputs, datum.receiver, payout_amount) &&
+        next.released40 == True &&
+        next.paid_out == datum.paid_out + payout_amount &&
+        next.net_total == datum.net_total - payout_amount &&
+        next.receiver == datum.receiver &&
+        next.oracle == datum.oracle
+      }
+
+      ReleaseFinal -> {
+        let ten_days_ms = 10 * 24 * 3600 * 1000
+        let ten_days_after_first = datum.first_watch + ten_days_ms
+
+        // Valid if EITHER condition is true:
+        // 1. Current time is after dispute deadline
+        // 2. Current time is 10 days after first watch
+        let lower_bound = tx.validity_range.lower_bound.bound_type
+        expect Finite(lb) = lower_bound
+        let time_ok = lb >= datum.dispute_by || lb >= ten_days_after_first
+
+        expect_signature(datum.receiver, tx.extra_signatories) &&
+        datum.released40 &&
+        !datum.releasedFinal &&
+        time_ok &&
+        has_output_to_pkh(tx.outputs, datum.receiver, datum.net_total)
+      }
+
+      Refund -> {
+        let metrics_unmet =
+          !datum.all_watch_met ||
+          datum.comments < 3 ||
+          !avg_rating_ok(datum.rating_sum, datum.rating_count, 35)
+
+        let upper_bound = tx.validity_range.upper_bound.bound_type
+        expect Finite(ub) = upper_bound
+        let within_dispute = ub <= datum.dispute_by
+
+        ( within_dispute || metrics_unmet ) &&
+        expect_signature(datum.oracle, tx.extra_signatories)
+      }
+
+      DisputeHold -> {
+        expect Some(continuing_out) = find_continuing(tx.outputs, script_addr)
+        expect Some(next) = parse_output_datum(continuing_out)
+
+        expect_signature(datum.oracle, tx.extra_signatories) &&
+        next.receiver == datum.receiver &&
+        next.oracle == datum.oracle &&
+        !next.releasedFinal
       }
     }
   }
 }
-
