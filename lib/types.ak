@@ -1,61 +1,54 @@
+// types.ak - CORRECTED
 use cardano/address.{Address}
 
-// Core types for the escrow system and completion NFT policy.
-
 pub type EscrowDatum {
-  escrow_id: ByteArray,              // unique identifier for this escrow instance
-  sender: Address,                   // student / buyer
-  receiver: Address,                 // tutor / seller
-  total_locked: Int,                 // total lovelace locked after platform fee
-  phase1_amount: Int,                // 30%
-  phase2_amount: Int,                // 40%
-  phase3_amount: Int,                // 30%
-  phase1_released: Bool,             // phase1 paid
-  phase2_released: Bool,             // phase2 paid
-  phase3_released: Bool,             // phase3 paid
-  milestone_reached: Bool,           // milestone (>=50%) verified
-  dispute_window_start: Option<Int>, // posix ms when phase2 paid (start of 14d window)
-  resource_id: ByteArray,            // course / product id
-  oracle_pubkey: ByteArray,          // oracle public key for proofs
-  created_at: Int,                   // lock timestamp (posix ms)
-}
-
-pub type MilestoneProof {
-  sender_address: Address,
-  resource_id: ByteArray,
-  completion_percentage: Int,
-  timestamp: Int,
-  nonce: ByteArray,
-  signature: ByteArray,
-}
-
-pub type TimeProof {
-  escrow_id: ByteArray,
-  current_time: Int,
-  dispute_window_start: Int,
-  nonce: ByteArray,
-  signature: ByteArray,
-}
-
-pub type CompletionProof {
-  sender_address: Address,
-  resource_id: ByteArray,
-  completion_percentage: Int,
-  timestamp: Int,
-  nonce: ByteArray,
-  signature: ByteArray,
+  receiver: ByteArray,           // Receiver PKH (course creator)
+  oracle: ByteArray,             // Oracle PKH for proofs
+  net_total: Int,                // Cumulative locked funds (after platform fee)
+  paid_count: Int,               // Number of senders who paid
+  paid_out: Int,                 // Total already released
+  released30: Bool,              // First 30% batch released (sender 5)
+  released40: Bool,              // Metrics 40% released
+  releasedFinal: Bool,           // Final 30% released
+  comments: Int,                 // Aggregated comments
+  rating_sum: Int,               // Sum of ratings × 10
+  rating_count: Int,             // Number of ratings
+  all_watch_met: Bool,           // All senders watched ≥60%
+  first_watch: Int,              // Timestamp of first watch (POSIX ms)
+  dispute_by: Int,               // Dispute deadline (POSIX ms)
 }
 
 pub type EscrowRedeemer {
-  LockFunds
-  Release40 { proof: MilestoneProof }
-  Release30Final { proof: TimeProof }
-  Refund { sender_signature: ByteArray }
+  AddPayment {
+    net_amount: Int,
+    watch_met: Bool,
+    rating_x10: Int,
+    commented: Bool,
+    first_watch_at: Int,
+  }
+  ReleaseInitial                 // DEPRECATED (now automatic)
+  ReleaseMetrics40
+  ReleaseFinal
+  Refund
+  DisputeHold
+}
+
+// For NFT minting - this can stay per-sender
+pub type CompletionProof {
+  sender_address: Address,
+  resource_id: ByteArray,
+  completion_percentage: Int,    // Must be 100
+  timestamp: Int,
+  nonce: ByteArray,
+  signature: ByteArray,
 }
 
 pub type CompletionRedeemer {
-  MintCompletion { proof: CompletionProof, oracle_pubkey: ByteArray }
+  MintCompletion { 
+    proof: CompletionProof, 
+    oracle_pubkey: ByteArray 
+  }
 }
 
 pub const fourteen_days_ms: Int = 1_209_600_000
-pub const one_hour_ms: Int = 3_600_000
+pub const ten_days_ms: Int = 864_000_000
