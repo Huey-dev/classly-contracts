@@ -37,7 +37,8 @@ export type TimeProof = {
 };
 
 export type CompletionProof = {
-  senderAddress: string;
+  // Payment key hash (bech32 or hex); matches on-chain sender_pkh
+  senderPkh: string;
   resourceId: string;
   completionPercentage: number; // must be 100
   timestamp: bigint;
@@ -69,4 +70,42 @@ export function buildRefundTx() {
 
 export function buildCompletionNftMintTx(_proof: CompletionProof) {
   // TODO: mint single NFT under completion policy with oracle signature, send to senderAddress.
+}
+
+// ---------------------------------------------------------------------------
+// Blueprint loading helpers (browser-friendly). Place plutus.json in your
+// frontend public/ directory and load via fetch.
+// ---------------------------------------------------------------------------
+type Blueprint = {
+  validators: {
+    title: string;
+    compiledCode: string;
+  }[];
+};
+
+async function fetchBlueprint(publicPath = '/plutus.json'): Promise<Blueprint> {
+  if (typeof fetch === 'undefined') {
+    throw new Error('fetch is not available; load plutus.json manually');
+  }
+  const res = await fetch(publicPath);
+  if (!res.ok) throw new Error(`failed to load ${publicPath}: ${res.status}`);
+  return (await res.json()) as Blueprint;
+}
+
+// Load the escrow spend script (PlutusV3) from blueprint
+export async function loadEscrowValidator(publicPath?: string) {
+  const bp = await fetchBlueprint(publicPath);
+  const v = bp.validators.find((v) => v.title.includes('escrow.escrow.spend'));
+  if (!v) throw new Error('escrow.escrow.spend not found in plutus.json');
+  return { type: 'PlutusV3' as const, script: v.compiledCode };
+}
+
+// Load the completion NFT minting policy (PlutusV3) from blueprint
+export async function loadCompletionPolicy(publicPath?: string) {
+  const bp = await fetchBlueprint(publicPath);
+  const v = bp.validators.find((v) =>
+    v.title.includes('completion_nft_policy.completion_nft_policy.mint'),
+  );
+  if (!v) throw new Error('completion_nft_policy.mint not found in plutus.json');
+  return { type: 'PlutusV3' as const, script: v.compiledCode };
 }

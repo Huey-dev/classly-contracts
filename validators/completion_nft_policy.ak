@@ -34,36 +34,34 @@ fn has_token_at(
 
 validator completion_nft_policy {
   mint(_ignored: Data, redeemer: CompletionRedeemer, ctx: ScriptContext) {
-    when redeemer is {
-      CompletionRedeemer.MintCompletion { proof, oracle_pubkey } -> {
-        // Must be a full completion proof
-        expect proof.completion_percentage == 100
+    let CompletionRedeemer.MintCompletion { proof, oracle_pubkey } = redeemer
 
-        // Oracle signature over the proof message
-        let msg = build_completion_message(
+    // Must be a full completion proof
+    expect proof.completion_percentage == 100
+
+    // Oracle signature over the proof message
+    let msg = build_completion_message(
+      proof.sender_pkh,
+      proof.resource_id,
+      proof.timestamp,
+      proof.nonce,
+    )
+    expect verify_ed25519_signature(oracle_pubkey, msg, proof.signature)
+
+    // Validate mint intent and delivery
+    when ctx.info is {
+      Minting(policy_id) -> {
+        let asset_name = asset_name_from_proof(proof)
+        expect quantity_of(ctx.transaction.mint, policy_id, asset_name) == 1
+        expect has_token_at(
+          ctx.transaction.outputs,
           proof.sender_pkh,
-          proof.resource_id,
-          proof.timestamp,
-          proof.nonce,
+          policy_id,
+          asset_name,
         )
-        expect verify_ed25519_signature(oracle_pubkey, msg, proof.signature)
-
-        // Validate mint intent and delivery
-        when ctx.info is {
-          Minting(policy_id) -> {
-            let asset_name = asset_name_from_proof(proof)
-            expect quantity_of(ctx.transaction.mint, policy_id, asset_name) == 1
-            expect has_token_at(
-              ctx.transaction.outputs,
-              proof.sender_pkh,
-              policy_id,
-              asset_name,
-            )
-            True
-          }
-          _ -> False
-        }
+        True
       }
+      _ -> False
     }
   }
 
