@@ -1,0 +1,9 @@
+﻿aiken :     Compiling cardano/classly-contracts 0.0.0 (C:\Users\user\Desktop\classly-contracts)
+At line:1 char:45
++ cd C:\Users\user\Desktop\classly-contracts; aiken check 2>&1 | Out-Fi ...
++                                             ~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (    Compiling c...ssly-contracts):String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+    Compiling aiken-lang/stdlib v3.0.0 (C:\Users\user\Desktop\classly-contracts\build\packages\aiken-lang-stdlib)
+    Compiling sidan-lab/vodka 0.1.21 (C:\Users\user\Desktop\classly-contracts\build\packages\sidan-lab-vodka)
