@@ -26,6 +26,8 @@ pub type EscrowDatum {
   // Payment receiver (course creator) public key hash
   oracle: ByteArray,
   // Trusted off-chain authority public key hash (signs refunds/disputes)
+  course_id: ByteArray,
+  // Deterministic course identifier (e.g., sha256(courseId))
   net_total: Int,
   // Total ADA locked in escrow (in lovelace, after platform fee)
   paid_count: Int,
@@ -213,7 +215,7 @@ validator escrow {
 
         // VALIDATE ALL STATE TRANSITIONS
         ok_payout && // Immutable fields must not change
-        next.receiver == datum.receiver && next.oracle == datum.oracle && // Financial state updates
+        next.receiver == datum.receiver && next.oracle == datum.oracle && next.course_id == datum.course_id && // Financial state updates
         next.net_total == datum.net_total + net_amount - immediate_payout && next.paid_count == new_count && next.paid_out == datum.paid_out + immediate_payout && // Release flags
         next.released30 == if new_count >= 5 {
           True
@@ -260,7 +262,7 @@ validator escrow {
         expect_signature(datum.receiver, tx.extra_signatories) && datum.paid_count >= 5 && // At least 5 senders
         !datum.released30 && // Not already released
         has_output_to_pkh(tx.outputs, datum.receiver, payout_amount) && // State updates
-        next.released30 == True && next.paid_out == datum.paid_out + payout_amount && next.net_total == datum.net_total - payout_amount && next.receiver == datum.receiver && next.oracle == datum.oracle
+        next.released30 == True && next.paid_out == datum.paid_out + payout_amount && next.net_total == datum.net_total - payout_amount && next.receiver == datum.receiver && next.oracle == datum.oracle && next.course_id == datum.course_id
       }
 
       // ======================================================================
@@ -282,7 +284,7 @@ validator escrow {
         datum.comments >= 1 && // At least 1 comment
         avg_rating_ok(datum.rating_sum, datum.rating_count, 10) && // ↑ Average rating ≥ 1.0 stars (threshold_x10 = 10)
         has_output_to_pkh(tx.outputs, datum.receiver, payout_amount) && // State updates
-        next.released40 == True && next.paid_out == datum.paid_out + payout_amount && next.net_total == datum.net_total - payout_amount && next.receiver == datum.receiver && next.oracle == datum.oracle
+        next.released40 == True && next.paid_out == datum.paid_out + payout_amount && next.net_total == datum.net_total - payout_amount && next.receiver == datum.receiver && next.oracle == datum.oracle && next.course_id == datum.course_id
       }
 
       // ======================================================================
@@ -347,7 +349,7 @@ validator escrow {
         expect Some(next) = parse_output_datum(continuing_out)
 
         // Oracle can freeze escrow (prevents final release during dispute)
-        expect_signature(datum.oracle, tx.extra_signatories) && next.receiver == datum.receiver && next.oracle == datum.oracle && !next.releasedFinal
+        expect_signature(datum.oracle, tx.extra_signatories) && next.receiver == datum.receiver && next.oracle == datum.oracle && next.course_id == datum.course_id && !next.releasedFinal
       }
     }
     // ↑ Ensure final release flag not set during hold

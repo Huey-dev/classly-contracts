@@ -272,6 +272,7 @@ import { Data } from "lucid-cardano";
 export const EscrowDatum = Data.Object({
   receiver: Data.Bytes(),
   oracle: Data.Bytes(),
+  course_id: Data.Bytes(),
   net_total: Data.Integer(),
   paid_count: Data.Integer(),
   paid_out: Data.Integer(),
@@ -310,6 +311,7 @@ export const Redeemer = Data.Enum([
 export const createPaymentDatum = (params: {
   receiver: string;
   oracle: string;
+  courseId: string;
   netTotal?: bigint;
   paidCount?: number;
   paidOut?: number;
@@ -326,6 +328,7 @@ export const createPaymentDatum = (params: {
   return {
     receiver: params.receiver,
     oracle: params.oracle,
+    course_id: params.courseId,
     net_total: params.netTotal ?? 0n,
     paid_count: params.paidCount ?? 0,
     paid_out: params.paidOut ?? 0,
@@ -341,6 +344,8 @@ export const createPaymentDatum = (params: {
   };
 };
 ```
+
+`course_id` should be a deterministic hash of the course identifier (e.g., `sha256(courseId)`) so off-chain code can filter for the correct escrow UTxO.
 
 ## Step 6: Create Custom Hooks
 

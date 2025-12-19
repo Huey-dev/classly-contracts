@@ -5,6 +5,8 @@ pub type EscrowDatum {
   // Receiver PKH (course creator)
   oracle: ByteArray,
   // Oracle PKH for proofs
+  course_id: ByteArray,
+  // Deterministic course identifier (e.g., sha256(courseId))
   net_total: Int,
   // Cumulative locked funds (after platform fee)
   paid_count: Int,

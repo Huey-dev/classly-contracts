@@ -81,6 +81,9 @@ const sender_pkh: ByteArray =
 
 const resource_id: ByteArray = #"01"
 
+const course_id: ByteArray =
+  #"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+
 const oracle_pk: VerificationKey =
   #"38cfe74f7da0cf491401adf9602f09dc0f6504325df15e12ed8a1c2270ad7303"
 
@@ -232,6 +235,7 @@ fn base_datum() -> escrow.EscrowDatum {
   escrow.EscrowDatum {
     receiver: #"999999999999999999999999999999999999999999999999",
     oracle: #"888888888888888888888888888888888888888888888888",
+    course_id,
     net_total: 0,
     paid_count: 0,
     paid_out: 0,
@@ -261,6 +265,7 @@ test escrow_add_payment_releases_30_on_5th() {
     escrow.EscrowDatum {
       receiver: base.receiver,
       oracle: base.oracle,
+      course_id: base.course_id,
       net_total: 40,
       paid_count: 4,
       paid_out: 0,
@@ -296,6 +301,7 @@ test escrow_add_payment_releases_30_on_5th() {
     escrow.EscrowDatum {
       receiver: datum.receiver,
       oracle: datum.oracle,
+      course_id: datum.course_id,
       net_total: 35,
       paid_count: 5,
       paid_out: 15,
@@ -358,6 +364,7 @@ test escrow_release_metrics_40() {
     escrow.EscrowDatum {
       receiver: base.receiver,
       oracle: base.oracle,
+      course_id: base.course_id,
       net_total: 100,
       paid_count: 5,
       paid_out: 30,
@@ -386,6 +393,7 @@ test escrow_release_metrics_40() {
     escrow.EscrowDatum {
       receiver: datum.receiver,
       oracle: datum.oracle,
+      course_id: datum.course_id,
       net_total: 60,
       paid_count: 5,
       paid_out: 70,
@@ -448,6 +456,7 @@ test escrow_release_final_time_ok() {
     escrow.EscrowDatum {
       receiver: base.receiver,
       oracle: base.oracle,
+      course_id: base.course_id,
       net_total: 60,
       paid_count: 5,
       paid_out: 70,
@@ -524,6 +533,7 @@ test escrow_refund_metrics_unmet() {
     escrow.EscrowDatum {
       receiver: base.receiver,
       oracle: base.oracle,
+      course_id: base.course_id,
       net_total: 60,
       paid_count: 5,
       paid_out: 30,
